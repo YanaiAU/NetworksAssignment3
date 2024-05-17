@@ -1,0 +1,5 @@
+# ninja log v5
+1	47	1715813765724365888	build.ninja	b53cbaf786a450ff
+62	97	1715789501650594466	NetworksCommunicationAssignment3	68e7afa912e6a06c
+2	62	1715789501614595834	CMakeFiles/NetworksCommunicationAssignment3.dir/RUDP_API.c.o	98ae2c51a08b7708
+3	57	1715789501606596139	CMakeFiles/NetworksCommunicationAssignment3.dir/RUDP_Receiver.c.o	8b1ba741f470b28a

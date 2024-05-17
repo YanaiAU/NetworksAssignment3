@@ -3,18 +3,20 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+
 // RUDP packet structure
-struct rudp_packet {
-    int flags;         // Flags for SYN, ACK, etc.
-    int length;       // Length of the packet
-    int checksum;     // Checksum for error checking
-    int sequence_num; // Sequence number for data packets
-    int data[1024]; // Data payload
+struct __attribute__((packed)) RUDP_Packet {
+    uint16_t checksum; // 2 bytes for checksum
+    uint8_t flags;     // 1 byte for flags
+    uint16_t length;   // 2 bytes for length
+    char data[1019];   // 1019 bytes of data
 };
 
 // Function prototypes
 int rudp_socket();
-int rudp_bind(int sockfd, int port);
-int rudp_send(int sockfd, const char *data, int len);
-int rudp_recv(int sockfd, char *buffer, int buffer_len);
+int rudp_bind(int sockfd, int port, struct sockaddr_in addr);
+int rudp_send(int sockfd, struct RUDP_Packet *packet, struct sockaddr_in addr);
+int rudp_recv(int sockfd, struct RUDP_Packet *packet, struct sockaddr_in *addr);
 int rudp_close(int sockfd);
+uint16_t calculate_checksum(const struct RUDP_Packet *packet);
