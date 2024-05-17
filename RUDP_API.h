@@ -10,7 +10,8 @@ struct __attribute__((packed)) RUDP_Packet {
     uint16_t checksum; // 2 bytes for checksum
     uint8_t flags;     // 1 byte for flags
     uint16_t length;   // 2 bytes for length
-    char data[1019];   // 1019 bytes of data
+    uint16_t seq_num;    // 2 byte for sequence number
+    char data[1017];   // 1019 bytes of data
 };
 
 // Function prototypes
