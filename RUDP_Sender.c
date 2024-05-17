@@ -9,6 +9,10 @@
 
 #define MAX_RETRANSMISSION_ATTEMPTS 3
 #define TIMEOUT 5
+#define START_FILE_FLAG 8
+#define SYN_FLAG 2
+#define ACK_FLAG 1
+#define FIN_FLAG 4
 
 char *util_generate_random_data(unsigned int size) {
     char *buffer = NULL;
@@ -54,16 +58,48 @@ int main(int argc, char *argv[]) {
     receiver_addr.sin_addr.s_addr = inet_addr(receiver_ip);
     receiver_addr.sin_port = htons(port);
 
+    // Send SYN packet to establish connection
+    struct RUDP_Packet syn_packet;
+    syn_packet.flags = SYN_FLAG;
+    syn_packet.checksum = 0;
+    syn_packet.length = htons(0);
+    rudp_send(sockfd, &syn_packet, receiver_addr);
+    printf("syn_packet : %d-%d\n", syn_packet.checksum, syn_packet.flags);
+
+    // Wait for SYN-ACK packet
+    int syn_ack_received = 0;
+    struct pollfd fds[1];
+    fds[0].fd = sockfd;
+    fds[0].events = POLLIN;
+
+    while (!syn_ack_received) {
+        int poll_ret = poll(fds, 1, TIMEOUT * 1000);
+        if (poll_ret > 0) {
+            if (fds[0].revents & POLLIN) {
+                struct RUDP_Packet ack_packet;
+                if (rudp_recv(sockfd, &ack_packet, &receiver_addr) > 0) {
+                    if ((ack_packet.flags & ACK_FLAG) && (ack_packet.flags & SYN_FLAG)) { // Check for ACK and SYN flags
+                        printf("SYN-ACK received.\n");
+                        syn_ack_received = 1;
+                    }
+                }
+            }
+        } else {
+            printf("Timeout waiting for SYN-ACK.\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
     char choice;
     do {
-        struct RUDP_Packet syn_packet;
-        syn_packet.flags = 2;
-        syn_packet.checksum = 0;
-        syn_packet.length = htons(0);
-        rudp_send(sockfd, &syn_packet, receiver_addr);
-        printf("syn_packet : %d-%d\n", syn_packet.checksum, syn_packet.flags);
+        // Send START_FILE packet
+        struct RUDP_Packet start_file_packet;
+        start_file_packet.flags = START_FILE_FLAG;
+        start_file_packet.checksum = 0;
+        start_file_packet.length = htons(0);
+        rudp_send(sockfd, &start_file_packet, receiver_addr);
 
-        size_t data_size = 2 * 1024 * 1024;
+        size_t data_size = 2 * 1024 * 1024; // 2 MB
         char *data = util_generate_random_data(data_size);
         if (data == NULL) {
             fprintf(stderr, "Error generating random data\n");
@@ -102,7 +138,7 @@ int main(int argc, char *argv[]) {
                     if (fds[0].revents & POLLIN) {
                         struct RUDP_Packet ack_packet;
                         if (rudp_recv(sockfd, &ack_packet, &receiver_addr) > 0) {
-                            if (ack_packet.flags & 1) {
+                            if (ack_packet.flags & ACK_FLAG) { // ACK flag
                                 for (int i = 0; i < num_packets_sent; i++) {
                                     if (memcmp(&sent_packets[i].packet.data, ack_packet.data, ntohs(ack_packet.length)) == 0) {
                                         sent_packets[i].ack_received = 1;
@@ -137,39 +173,6 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-        // Send FIN packet
-        struct RUDP_Packet fin_packet;
-        memset(&fin_packet, 0, sizeof(fin_packet));
-        fin_packet.flags = 4; // FIN flag
-        fin_packet.checksum = 0;
-        fin_packet.length = htons(0);
-        rudp_send(sockfd, &fin_packet, receiver_addr);
-        printf("FIN packet sent.\n");
-
-        // Wait for acknowledgment of FIN packet
-        int fin_ack_received = 0;
-        struct pollfd fds[1];
-        fds[0].fd = sockfd;
-        fds[0].events = POLLIN;
-
-        while (!fin_ack_received) {
-            int poll_ret = poll(fds, 1, TIMEOUT * 1000); // Wait for ACK with a longer timeout
-            if (poll_ret > 0) {
-                if (fds[0].revents & POLLIN) {
-                    struct RUDP_Packet ack_packet;
-                    if (rudp_recv(sockfd, &ack_packet, &receiver_addr) > 0) {
-                        if ((ack_packet.flags & 1) && (ack_packet.flags & 4)) { // Check for ACK and FIN flags
-                            printf("FIN ACK received.\n");
-                            fin_ack_received = 1;
-                        }
-                    }
-                }
-            } else {
-                printf("Timeout waiting for FIN ACK.\n");
-                break;
-            }
-        }
-
         free(data);
 
         printf("\nSend another random file? (y/n): ");
@@ -177,6 +180,37 @@ int main(int argc, char *argv[]) {
 
     } while (choice == 'y' || choice == 'Y');
 
+    // Send FIN packet
+    struct RUDP_Packet fin_packet;
+    memset(&fin_packet, 0, sizeof(fin_packet));
+    fin_packet.flags = FIN_FLAG; // FIN flag
+    fin_packet.checksum = 0;
+    fin_packet.length = htons(0);
+    rudp_send(sockfd, &fin_packet, receiver_addr);
+    printf("FIN packet sent.\n");
+
+    // Wait for acknowledgment of FIN packet
+    int fin_ack_received = 0;
+    fds[0].fd = sockfd;
+    fds[0].events = POLLIN;
+
+    while (!fin_ack_received) {
+        int poll_ret = poll(fds, 1, TIMEOUT * 1000); // Wait for ACK with a longer timeout
+        if (poll_ret > 0) {
+            if (fds[0].revents & POLLIN) {
+                struct RUDP_Packet ack_packet;
+                if (rudp_recv(sockfd, &ack_packet, &receiver_addr) > 0) {
+                    if ((ack_packet.flags & ACK_FLAG) && (ack_packet.flags & FIN_FLAG)) { // Check for ACK and FIN flags
+                        printf("FIN ACK received.\n");
+                        fin_ack_received = 1;
+                    }
+                }
+            }
+        } else {
+            printf("Timeout waiting for FIN ACK.\n");
+            break;
+        }
+    }
 
     if (rudp_close(sockfd) < 0) {
         fprintf(stderr, "Error closing socket\n");
