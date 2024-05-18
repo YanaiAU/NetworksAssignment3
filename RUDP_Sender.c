@@ -3,16 +3,15 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <time.h>
-#include <fcntl.h>
 #include <sys/poll.h>
 #include "RUDP_API.h"
 
 #define MAX_RETRANSMISSION_ATTEMPTS 3
 #define TIMEOUT 5
-#define START_FILE_FLAG 8
-#define SYN_FLAG 2
 #define ACK_FLAG 1
+#define SYN_FLAG 2
 #define FIN_FLAG 4
+#define START_FILE_FLAG 8
 
 char *util_generate_random_data(unsigned int size) {
     char *buffer = NULL;
@@ -29,18 +28,17 @@ char *util_generate_random_data(unsigned int size) {
 
 struct SentPacket {
     struct RUDP_Packet packet;
-    time_t send_time;
     int retransmission_attempts;
 };
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
+    if (argc != 5 || strcmp(argv[1], "-ip" ) != 0 || strcmp(argv[3], "-p") != 0) {
         fprintf(stderr, "Usage: %s <receiver_ip> <port>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    char *receiver_ip = argv[1];
-    int port = atoi(argv[2]);
+    char *receiver_ip = argv[2];
+    int port = atoi(argv[4]);
 
     int sockfd = rudp_socket();
     if (sockfd < 0) {
@@ -48,8 +46,8 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    struct SentPacket sent_packet;
-    memset(&sent_packet, 0, sizeof(sent_packet));
+    struct SentPacket sent_packets[100];
+    memset(sent_packets, 0, sizeof(sent_packets));
 
     struct sockaddr_in receiver_addr;
     memset(&receiver_addr, 0, sizeof(receiver_addr));
@@ -57,7 +55,6 @@ int main(int argc, char *argv[]) {
     receiver_addr.sin_addr.s_addr = inet_addr(receiver_ip);
     receiver_addr.sin_port = htons(port);
 
-    // Send SYN packet to establish connection
     struct RUDP_Packet syn_packet;
     syn_packet.flags = SYN_FLAG;
     syn_packet.checksum = htons(0);
@@ -66,7 +63,6 @@ int main(int argc, char *argv[]) {
     rudp_send(sockfd, &syn_packet, receiver_addr);
     printf("SYN packet sent.\n");
 
-    // Wait for SYN-ACK packet
     struct pollfd fds[1];
     fds[0].fd = sockfd;
     fds[0].events = POLLIN;
@@ -90,7 +86,11 @@ int main(int argc, char *argv[]) {
 
     char choice;
     do {
-        // Send START_FILE packet
+        int cwnd = 1;
+        int ssthresh = 64;
+        int duplicate_acks = 0;
+        int last_ack_received = -1;
+
         struct RUDP_Packet start_file_packet;
         start_file_packet.flags = START_FILE_FLAG;
         start_file_packet.checksum = htons(0);
@@ -98,7 +98,7 @@ int main(int argc, char *argv[]) {
         start_file_packet.seq_num = 0;
         rudp_send(sockfd, &start_file_packet, receiver_addr);
 
-        size_t data_size = 2 * 1024 * 1024; // 2 MB
+        size_t data_size = 2 * 1024 * 1024;
         char *data = util_generate_random_data(data_size);
         if (data == NULL) {
             fprintf(stderr, "Error generating random data\n");
@@ -120,10 +120,9 @@ int main(int argc, char *argv[]) {
             packet.seq_num = seq_num;
             memcpy(packet.data, data + bytes_sent, chunk_size);
             rudp_send(sockfd, &packet, receiver_addr);
-            printf("Sent packet with seq_num %d\n", seq_num);
 
-            sent_packet.packet = packet;
-            sent_packet.send_time = time(NULL);
+            struct SentPacket sent_packet = {packet, time(NULL)};
+            sent_packets[seq_num % 100] = sent_packet;
             sent_packet.retransmission_attempts = 0;
 
             int ack_received = 0;
@@ -133,11 +132,27 @@ int main(int argc, char *argv[]) {
                     struct RUDP_Packet ack_packet;
                     if (rudp_recv(sockfd, &ack_packet, &receiver_addr) > 0) {
                         if ((ack_packet.flags & ACK_FLAG) && (ack_packet.seq_num == seq_num)) {
-                            printf("Received ACK for packet %d\n", seq_num);
-                            printf("%zu\n", bytes_sent);
-                            ack_received = 1;
                             bytes_sent += chunk_size;
                             seq_num++;
+                            if (ack_packet.seq_num == last_ack_received) {
+                                duplicate_acks++;
+                                if (duplicate_acks == 3) {
+                                    ssthresh = cwnd / 2;
+                                    cwnd = ssthresh + 3;
+                                    duplicate_acks = 0;
+                                    printf("Fast retransmit\n");
+                                    rudp_send(sockfd, &sent_packets[ack_packet.seq_num % 100].packet, receiver_addr);
+                                }
+                            } else {
+                                last_ack_received = ack_packet.seq_num;
+                                duplicate_acks = 0;
+                                if (cwnd < ssthresh) {
+                                    cwnd++;
+                                } else {
+                                    cwnd += 1 / cwnd;
+                                }
+                                ack_received = 1;
+                            }
                         }
                     }
                 } else {
@@ -159,7 +174,6 @@ int main(int argc, char *argv[]) {
 
     } while (choice == 'y' || choice == 'Y');
 
-    // Send FIN packet
     struct RUDP_Packet fin_packet;
     memset(&fin_packet, 0, sizeof(fin_packet));
     fin_packet.flags = FIN_FLAG;
@@ -169,7 +183,6 @@ int main(int argc, char *argv[]) {
     rudp_send(sockfd, &fin_packet, receiver_addr);
     printf("FIN packet sent.\n");
 
-    // Wait for acknowledgment of FIN packet
     int fin_ack_received = 0;
     while (!fin_ack_received) {
         int poll_ret = poll(fds, 1, TIMEOUT * 1000);
