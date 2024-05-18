@@ -1,3 +1,0 @@
-/home/yanai/CLionProjects/NetworksCommunicationAssignment3/cmake-build-debug/CMakeFiles/NetworksCommunicationAssignment3.dir
-/home/yanai/CLionProjects/NetworksCommunicationAssignment3/cmake-build-debug/CMakeFiles/edit_cache.dir
-/home/yanai/CLionProjects/NetworksCommunicationAssignment3/cmake-build-debug/CMakeFiles/rebuild_cache.dir
